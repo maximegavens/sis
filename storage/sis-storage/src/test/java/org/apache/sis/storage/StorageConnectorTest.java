@@ -16,29 +16,40 @@
  */
 package org.apache.sis.storage;
 
-import java.net.URI;
+import java.io.ByteArrayInputStream;
 import java.io.DataInput;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
-import java.io.IOException;
+import java.net.URI;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.nio.channels.ReadableByteChannel;
-import javax.imageio.stream.ImageInputStream;
-import javax.imageio.ImageIO;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
-import org.apache.sis.setup.OptionKey;
-import org.apache.sis.util.UnconvertibleObjectException;
+import java.util.Random;
+import javax.imageio.ImageIO;
+import javax.imageio.stream.ImageInputStream;
 import org.apache.sis.internal.storage.io.ChannelDataInput;
 import org.apache.sis.internal.storage.io.ChannelImageInputStream;
 import org.apache.sis.internal.storage.io.InputStreamAdapter;
-import org.apache.sis.test.DependsOnMethod;
+import org.apache.sis.setup.OptionKey;
 import org.apache.sis.test.DependsOn;
+import org.apache.sis.test.DependsOnMethod;
 import org.apache.sis.test.TestCase;
+import org.apache.sis.util.UnconvertibleObjectException;
 import org.junit.Test;
 
 import static org.junit.Assume.assumeTrue;
-import static org.opengis.test.Assert.*;
+import static org.opengis.test.Assert.assertArrayEquals;
+import static org.opengis.test.Assert.assertEquals;
+import static org.opengis.test.Assert.assertFalse;
+import static org.opengis.test.Assert.assertInstanceOf;
+import static org.opengis.test.Assert.assertNotNull;
+import static org.opengis.test.Assert.assertNotSame;
+import static org.opengis.test.Assert.assertNull;
+import static org.opengis.test.Assert.assertSame;
+import static org.opengis.test.Assert.assertTrue;
+import static org.opengis.test.Assert.fail;
 
 
 /**
@@ -389,5 +400,44 @@ public final strictfp class StorageConnectorTest extends TestCase {
         connection.closeAllExcept(input);
         assertTrue("channel.isOpen()", channel.isOpen());
         channel.close();
+    }
+
+    @Test
+    public void getting_buffer_should_not_change_underlying_stream_position() throws Exception {
+        final StorageConnector con = create(false);
+
+        final ImageInputStream stream = con.getStorageAs(ImageInputStream.class);
+
+        final ByteBuffer buffer = con.getStorageAs(ByteBuffer.class);
+        assertEquals(0, stream.getStreamPosition());
+
+        buffer.get();
+        assertEquals(0, stream.getStreamPosition());
+
+        con.closeAllExcept(null);
+    }
+
+    @Test
+    public void moving_stream_should_not_impact_buffer() throws Exception {
+        final byte[] data = new byte[(int) Math.pow(2, 16)];
+        new Random().nextBytes(data);
+        final StorageConnector connector = new StorageConnector(new ByteArrayInputStream(data));
+        final ByteBuffer buffer = connector.getStorageAs(ByteBuffer.class);
+        final int blockSize = buffer.remaining();
+        final byte[] ctrl = new byte[blockSize];
+        buffer.get(ctrl).rewind();
+
+        InputStream stream = connector.getStorageAs(InputStream.class);
+        stream.mark(blockSize *2);
+        stream.skip(blockSize);
+        stream.read(new byte[blockSize]);
+        stream.reset();
+
+        final byte[] afterValue = new byte[blockSize];
+        buffer.get(afterValue).rewind();
+
+        assertArrayEquals(ctrl, afterValue);
+
+        connector.closeAllExcept(null);
     }
 }
