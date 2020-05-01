@@ -48,20 +48,24 @@ import org.apache.sis.util.collection.BackingStoreException;
  *
  * Example:
  * <pre>
- * final StrictStorageConnector c = new StrictStorageConnector(Paths.get("path/to/file");
- * // Use connector automatically reset buffering to check support
- * Boolean isSupported = c.useAsBuffer((buffer) -%gt; buffer.get() == SEARCHED_KEY);
- * // Once support is validated, acquire real storage connection. At this point,
- * // storage life cycle becomes the responsability of the caller
- * if (supported) {
+ * try ( StrictStorageConnector c = new StrictStorageConnector(Paths.get("path/to/file")) {
+ *
+ *   // Use connector automatically reset buffering to check support
+ *   Boolean isSupported = c.useAsBuffer((buffer) -%gt; buffer.get() == SEARCHED_KEY);
+ *
+ *   // Once support is validated, acquire real storage connection. At this point,
+ *   // storage life cycle becomes the responsability of the caller
+ *   if (supported) {
  *     try ( InputStream stream = c.commit( InputStream.class ) ) {
  *         // read all needed data from aquired stream
  *     }
- * } else c.closeAllExcept(null); // not acceptable input, completely close component.
+ *   }
+ * }
  * </pre>
  */
-public class StrictStorageConnector extends StorageConnector {
+public class StrictStorageConnector extends StorageConnector implements AutoCloseable {
 
+    private Object committedStorage;
     private volatile int concurrentFlag;
 
     public StrictStorageConnector(Object storage) {
@@ -70,6 +74,8 @@ public class StrictStorageConnector extends StorageConnector {
 
     @Override
     public void closeAllExcept(Object view) throws DataStoreException {
+        // Closing multiple times is OK. However, if the view is not null, we will let control raise an error.
+        if (concurrentFlag < 0 && view == null) return;
         try {
             doUnderControl(() -> {
                 concurrentFlag = -1;
@@ -188,6 +194,11 @@ public class StrictStorageConnector extends StorageConnector {
             // any "storage" logic (only in-memory path/uri conversion if needed).
             throw new BackingStoreException(e);
         }
+    }
+
+    @Override
+    public void close() throws IOException, DataStoreException {
+        super.closeAllExcept(committedStorage);
     }
 
     private interface StorageCallable<V> extends Callable<V> {

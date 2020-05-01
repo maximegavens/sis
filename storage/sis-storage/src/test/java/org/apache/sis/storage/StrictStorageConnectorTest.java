@@ -1,14 +1,15 @@
 package org.apache.sis.storage;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URISyntaxException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import org.apache.sis.setup.OptionKey;
 import org.apache.sis.test.DependsOn;
-import org.junit.Ignore;
 import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -16,6 +17,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 @DependsOn(org.apache.sis.storage.StorageConnectorTest.class)
 public class StrictStorageConnectorTest {
@@ -64,37 +66,111 @@ public class StrictStorageConnectorTest {
     @Test
     public void byte_buffer_is_rewind_after_use() throws Exception {
         final byte[] ctrl = getFileBytes();
-        final StrictStorageConnector connector = create(false);
-        // Mess with internal buffer
-        connector.useAsBuffer(buffer -> {
-            // mess with it
-            return buffer.get(new byte[10]);
-        });
-        // ensure it has been properly rewind
-        connector.useAsBuffer(buffer -> {
-            assertEquals(0, buffer.position());
-            byte[] readValue = new byte[buffer.remaining()];
-            buffer.get(readValue);
-            assertArrayEquals(ctrl, readValue);
-            return null;
-        });
+        try (final StrictStorageConnector connector = create(false)) {
+            // Mess with internal buffer
+            connector.useAsBuffer(buffer -> {
+                // mess with it
+                return buffer.get(new byte[10]);
+            });
+            // ensure it has been properly rewind
+            connector.useAsBuffer(buffer -> {
+                assertEquals(0, buffer.position());
+                byte[] readValue = new byte[buffer.remaining()];
+                buffer.get(readValue);
+                assertArrayEquals(ctrl, readValue);
+                return null;
+            });
+        }
     }
 
     @Test
-    @Ignore("To implement")
+    public void fail_fast_when_user_corrupts_stream_mark() throws IOException, DataStoreException {
+        try (final StrictStorageConnector c = create(false)) {
+            try {
+                c.useAsImageInputStream(stream -> {
+                    stream.skipBytes(1);
+                    stream.mark();
+                    return 0;
+                });
+                fail("We should have detected something has gone wrong");
+            } catch (DataStoreException e) {
+                // Expected behavior: connector has detected that rewind did not work properly.
+            }
+        }
+    }
+
+    @Test
     public void no_concurrency_allowed() throws Exception {
+        try (final StrictStorageConnector c = create(false)) {
+            synchronized (c) {
+            new Thread(() -> {
+                try {
+                    c.useAsBuffer(buffer -> {
+                        synchronized (c) {
+                            try {
+                                c.notifyAll();
+                                c.wait(1000);
+                            } catch (InterruptedException e) {
+                                // Do not matter here.
+                            }
+                        }
+                        return null;
+                    });
 
+                } catch (IOException | DataStoreException e) {
+                    // Do not matter here.
+                }
+            }).start();
+
+            // Ensure above operation is
+                c.wait(100);
+            }
+
+            try {
+                c.useAsBuffer(buffer -> null);
+                fail("Concurrency error should have been raised.");
+            } catch (ConcurrentReadException e) {
+                // Expected behavior: fail-fast to prevent concurrency.
+            }
+            synchronized (c) {
+                c.notifyAll();
+            }
+        }
     }
 
     @Test
-    @Ignore("To implement")
     public void commit_close_all_resources_but_chosen() throws Exception {
+        final InputStream is;
+        try (final StrictStorageConnector c = create(false)) {
 
+            is = c.commit(InputStream.class);
+
+            try {
+                c.getStorageAs(ByteBuffer.class);
+                fail("connector should be closed");
+            } catch (IllegalStateException e) {
+                // Expected behavior
+                try {
+                    is.read();
+                } catch (IOException bis) {
+                    fail("We queried for the input stream to stay open.");
+                }
+            }
+        }
+
+        try ( final InputStream close = is ) {
+            is.read();
+        } catch (IOException e) {
+            fail("Committed storage view should still be opened.");
+        }
     }
 
     @Test
-    @Ignore("To implement")
     public void closing_multiple_times_causes_no_error() throws Exception {
+        try ( StrictStorageConnector c = create(true) ) {
 
+            c.commit(InputStream.class);
+            c.closeAllExcept(null);
+        }
     }
 }
