@@ -16,17 +16,21 @@
  */
 package org.apache.sis.referencing.operation.projection;
 
+import org.apache.sis.internal.referencing.Formulas;
 import org.opengis.util.FactoryException;
 import org.opengis.referencing.operation.TransformException;
 import org.apache.sis.internal.referencing.provider.MapProjection;
 import org.apache.sis.test.DependsOn;
 import org.junit.Test;
 
+import static java.lang.StrictMath.toRadians;
+
 
 /**
  * Tests the {@link ModifiedAzimuthalEquidistant} class.
  *
  * @author  Martin Desruisseaux (Geomatys)
+ * @author  Maxime Gavens (Geomatys)
  * @version 1.1
  * @since   1.1
  * @module
@@ -84,12 +88,37 @@ public final strictfp class ModifiedAzimuthalEquidistantTest extends AzimuthalEq
     }
 
     /**
-     * Not yet supported.
+     * Tests the derivatives at a few points on an ellipsoid. This method compares the derivatives computed
+     * by the projection with an estimation of derivatives computed by the finite differences method.
+     *
+     * @throws FactoryException if an error occurred while creating the map projection.
+     * @throws TransformException if an error occurred while projecting a point.
      */
     @Test
     @Override
-    @org.junit.Ignore("Implementation not yet completed")
     public void testDerivative() throws FactoryException, TransformException {
-        // TODO
+        createCompleteProjection(method(),
+                CLARKE_A,
+                CLARKE_B,
+                40,                 // Longitude of natural origin (central-meridian)
+                25,                 // Latitude of natural origin
+                Double.NaN,         // Standard parallel 1
+                Double.NaN,         // Standard parallel 2
+                Double.NaN,         // Scale factor
+                40000,              // False easting
+                60000);             // False Northing
+        final double delta = (1.0 / 60) / 1852;                 // Approximately 1 metre.
+        derivativeDeltas = new double[] {delta, delta};
+        tolerance = Formulas.LINEAR_TOLERANCE / 10;
+        verifyDerivative(toRadians(-4), toRadians(40));
+        verifyDerivative(toRadians(10), toRadians(60));
+        verifyInverse(toRadians(15), toRadians(25));
+        verifyDerivative(30, 27);
+        verifyDerivative(27, 20);
+        verifyDerivative(105,  30);
+        verifyDerivative(100, -60);
+        verifyDerivative(-100,  3);
+        verifyDerivative( -56, 50);
+        verifyDerivative( -20, 47);
     }
 }

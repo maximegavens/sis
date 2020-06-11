@@ -17,6 +17,8 @@
 package org.apache.sis.referencing.operation.projection;
 
 import java.util.EnumMap;
+
+import org.apache.sis.referencing.operation.matrix.Matrix2;
 import org.opengis.util.FactoryException;
 import org.opengis.referencing.operation.Matrix;
 import org.opengis.referencing.operation.MathTransform;
@@ -38,6 +40,7 @@ import static org.apache.sis.internal.referencing.provider.ModifiedAzimuthalEqui
  * For distances under 800 kilometres this modification introduces no significant error.
  *
  * @author  Martin Desruisseaux (Geomatys)
+ * @author  Maxime Gavens (Geomatys)
  * @version 1.1
  *
  * @see AzimuthalEquidistant
@@ -163,6 +166,7 @@ public class ModifiedAzimuthalEquidistant extends AzimuthalEquidistant {
         final double φ     = srcPts[srcOff+1];
         final double cosλ  = cos(λ);
         final double sinλ  = sin(λ);
+        final double sinλ2 = sinλ * sinλ;
         final double cosφ  = cos(φ);
         final double sinφ  = sin(φ);
         final double rν    = sqrt(1 - eccentricitySquared*(sinφ*sinφ));
@@ -172,6 +176,7 @@ public class ModifiedAzimuthalEquidistant extends AzimuthalEquidistant {
         final double sinα  = sin(α);
         final double cosα  = cos(α);
         final double H     = cosα * Hp;
+
         /*
          * Equations are:    s  =  asin(cos(φ₀)⋅sin(Ψ) − sin(φ₀)⋅cos(Ψ)) ⋅ signum(cos(α))     for small α
          *                   s  =  asin(sin(λ)⋅cos(Ψ) / sin(α))                               for other α
@@ -187,6 +192,7 @@ public class ModifiedAzimuthalEquidistant extends AzimuthalEquidistant {
             c = sinλ / (rcosΨ * sinα);
         }
         c = asin(c);                    // After this line this is the `s` value in EPSG guidance notes.
+        final double s = c;
         final double s2 = c  * c;
         final double s3 = s2 * c;
         final double s4 = s2 * s2;
@@ -205,7 +211,112 @@ public class ModifiedAzimuthalEquidistant extends AzimuthalEquidistant {
         if (!derivate) {
             return null;
         }
-        throw new ProjectionException("Derivative not yet implemented.");
+
+        /*
+         * End of map projection. Now compute the derivative, if requested.
+         */
+        final double Ψ      = atan(tanΨ);
+        final double cosΨ   = cos(Ψ);
+        final double sinΨ   = sin(Ψ);
+        final double secΨ   = 1 / cosΨ;
+        final double secΨ2  = secΨ * secΨ;
+
+        final double tanφ   = sinφ / cosφ;
+        final double secφ   = 1 / cosφ;
+        final double secφ2  = secφ * secφ;
+
+        final double tanα   = tan(α);
+        final double cotα   = 1 / tanα;
+        final double cscα   = 1 / sinα;
+
+        final double dν_dφ      = eccentricitySquared * cosφ * sinφ / (rν * rν * rν);
+        final double dΨ_dφ      = ((1  - eccentricitySquared) * secφ2  +  ℯ2_ν0_sinφ0 * secφ * tanφ * rν  -  ℯ2_ν0_sinφ0 * secφ * dν_dφ * rν*rν)
+                / (1 + tanΨ * tanΨ);
+        final double utilvar1   = cosφ0 * tanΨ  -  sinφ0 * cosλ;
+        final double dα_dλ      = (cosλ * utilvar1  -  sinφ0 * sinλ2) / (sinλ2  +  utilvar1 * utilvar1);
+        final double dα_dφ      = - cosφ0 * secΨ2 * sinλ * dΨ_dφ / (sinλ2  +  utilvar1 * utilvar1);
+
+        double ds_dφ;
+        double ds_dλ;
+        double utilvar2;
+        if (abs(sinα) < ANGULAR_TOLERANCE) {
+            utilvar2 = cosΨ * sinφ0  -  cosφ0 * sinΨ;
+            ds_dλ = 0;
+            ds_dφ = (cosφ0 * cosΨ * dΨ_dφ  +  sinφ0 * sinΨ * dΨ_dφ) / sqrt(1  -  utilvar2 * utilvar2);
+
+            if (cosα < 0) ds_dφ = -ds_dφ;
+        } else {
+            utilvar2 = cosΨ * cscα * sinλ;
+            ds_dλ = (cosλ * cosΨ * cscα  -  utilvar2 * cotα * dα_dλ) / sqrt(1  -  utilvar2 * utilvar2);
+            ds_dφ = - (cscα * sinλ * sinΨ * dΨ_dφ  +  utilvar2 * cotα * dα_dφ) / sqrt(1  -  utilvar2 * utilvar2);
+        }
+
+        final double H3 = H2 * H;
+        final double G2 = G * G;
+
+        final double dH_dλ = - eccentricity * cosφ0 * sinα * dα_dλ / sqrt(1 - eccentricitySquared);
+        final double dH_dφ = - eccentricity * cosφ0 * sinα * dα_dφ / sqrt(1 - eccentricitySquared);
+
+        final double h1 = H2*(1 - H2);
+        final double h2 = GH*(1 - 2*H2);
+        final double h3 = H2*(4 - 7*H2) - 3*G2*(1 - 7*H2);
+        final double h4 = GH;
+
+        final double dh1_dφ = -2*H3*dH_dφ + 2*H*(1 - H2)*dH_dφ;
+        final double dh2_dφ = -4*G*H2*dH_dφ + G*(1 - 2*H2)*dH_dφ;
+        final double dh3_dφ = 42*G2*H*dH_dφ - 14*H3*dH_dφ + 2*H*(4 - 7*H2)*dH_dφ;
+        final double dh4_dφ = G*dH_dφ;
+
+        final double dh1_dλ = -2*H3*dH_dλ + 2*H*(1 - H2)*dH_dλ;
+        final double dh2_dλ = -4*G*H2*dH_dλ + G*(1 - 2*H2)*dH_dλ;
+        final double dh3_dλ = 42*G2*H*dH_dλ - 14*H3*dH_dλ + 2*H*(4 - 7*H2)*dH_dλ;
+        final double dh4_dλ = G*dH_dλ;
+
+        final double dc_λ = ds_dλ * (
+                1
+                        - s2/6   * h1
+                        + s3/8   * h2
+                        + s4/120 * h3
+                        - s5/48  * h4
+        )
+                + s * (
+                        - s2/6   * dh1_dλ
+                        + s3/8   * dh2_dλ
+                        + s4/120 * dh3_dλ
+                        - s5/48  * dh4_dλ
+
+                        - s/3     * h1 * ds_dλ
+                        + 3*s2/8  * h2 * ds_dλ
+                        + s3/30   * h3 * ds_dλ
+                        - 5*s4/48 * h4 * ds_dλ
+        );
+
+        final double dc_φ = ds_dφ * (
+                1
+                        - s2/6   * h1
+                        + s3/8   * h2
+                        + s4/120 * h3
+                        - s5/48  * h4
+        )
+                + s * (
+                        - s2/6   * dh1_dφ
+                        + s3/8   * dh2_dφ
+                        + s4/120 * dh3_dφ
+                        - s5/48  * dh4_dφ
+
+                        - s/3     * h1 * ds_dφ
+                        + 3*s2/8  * h2 * ds_dφ
+                        + s3/30   * h3 * ds_dφ
+                        - 5*s4/48 * h4 * ds_dφ
+        );
+
+        final double dx_dλ = sinα * dc_λ  +  c * cosα * dα_dλ;
+        final double dx_dφ = sinα * dc_φ  +  c * cosα * dα_dφ;
+        final double dy_dλ = cosα * dc_λ  -  c * sinα * dα_dλ;
+        final double dy_dφ = cosα * dc_φ  -  c * sinα * dα_dφ;
+
+        return new Matrix2(dx_dλ, dx_dφ,      // ∂x/∂λ , ∂x/∂φ
+                           dy_dλ, dy_dφ);     // ∂y/∂λ , ∂y/∂φ
     }
 
     /**
